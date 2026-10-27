@@ -26,6 +26,11 @@ const FILLED_ICON =
 // pixel height.
 let playerAspectRatio = null;
 
+// Twitch re-renders the player and chat on channel switch, stripping our
+// vt-* classes while #root keeps "vertical-enabled" (hiding the player).
+// Remember the active mode so reapplyMode() can restore it.
+let currentMode = MODE_CLOSED;
+
 function isOpen() {
   return $(".vt-chat").length > 0;
 }
@@ -160,7 +165,29 @@ function change(mode) {
     }, 50);
   }
 
+  currentMode = mode;
   saveToStorage('previous', mode);
+}
+
+function reapplyMode(retryCount = 0) {
+  if (currentMode == MODE_CLOSED) {
+    return;
+  }
+  const player = $(PLAYER_SELECTOR);
+  const chatParent = $(".chat-shell").parent().parent();
+  if (player.length == 0 || chatParent.length == 0) {
+    // New channel hasn't rendered yet (or this isn't a channel page).
+    if (retryCount < 10) {
+      setTimeout(function () {
+        reapplyMode(retryCount + 1);
+      }, 500);
+    }
+    return;
+  }
+  if (player.hasClass('vt-player') && chatParent.hasClass('vt-chat')) {
+    return;
+  }
+  change(currentMode);
 }
 
 
@@ -248,6 +275,7 @@ function onReady() {
   var target = document.querySelector("title");
   var observer = new MutationObserver(function () {
     addButton();
+    reapplyMode();
   });
   var config = {
     childList: true,
@@ -264,7 +292,7 @@ function onReady() {
 }
 
 async function restoreOptions() {
-  const setting = await getFromStorage('orientation', 'horizontal')
+  const setting = await getFromStorage('orientation', 'previous')
   const previousMode = await getFromStorage('previous', MODE_CLOSED);
   let mode = MODE_CLOSED;
   if (setting === 'horizontal') {
@@ -277,7 +305,8 @@ async function restoreOptions() {
     mode = previousMode;
   }
   if (mode !== MODE_CLOSED) {
-    waitAndChange(500, mode);
+    currentMode = mode;
+    reapplyMode();
   }
 };
 
