@@ -26,9 +26,9 @@ const FILLED_ICON =
 // pixel height.
 let playerAspectRatio = null;
 
-// Twitch re-renders the player and chat on channel switch, stripping our
-// vt-* classes while #root keeps "vertical-enabled" (hiding the player).
-// Remember the active mode so reapplyMode() can restore it.
+// Twitch re-renders the player and chat (channel switch, resize), stripping
+// our vt-* classes while #root keeps "vertical-enabled", which hides the
+// player. Remember the mode so reapplyMode() can restore it.
 let currentMode = MODE_CLOSED;
 
 function isOpen() {
@@ -137,10 +137,15 @@ function change(mode) {
       mode == MODE_THEATRE ? "evenodd" : "nonzero"
     );
 
-    // false: trust the (freshly seeded or previous) chat height and
-    // (re)establish the aspect ratio we'll preserve on window resizes.
-    onResize(false);
-    
+    if (isFirstChange && playerAspectRatio > 0 && isFinite(playerAspectRatio)) {
+      // Re-applying: keep the previous split instead of the 50/50 seed.
+      onResize(true);
+    } else {
+      // false: trust the (freshly seeded or previous) chat height and
+      // (re)establish the aspect ratio we'll preserve on window resizes.
+      onResize(false);
+    }
+
   } else {
     // Clean-up
     root.removeClass("vertical-enabled");
@@ -169,19 +174,15 @@ function change(mode) {
   saveToStorage('previous', mode);
 }
 
-function reapplyMode(retryCount = 0) {
-  if (currentMode == MODE_CLOSED) {
+function reapplyMode() {
+  // Twitch handles player fullscreen layout; fullscreenchange re-applies on exit.
+  if (currentMode == MODE_CLOSED || document.fullscreenElement) {
     return;
   }
   const player = $(PLAYER_SELECTOR);
   const chatParent = $(".chat-shell").parent().parent();
   if (player.length == 0 || chatParent.length == 0) {
-    // New channel hasn't rendered yet (or this isn't a channel page).
-    if (retryCount < 10) {
-      setTimeout(function () {
-        reapplyMode(retryCount + 1);
-      }, 500);
-    }
+    // Not rendered yet; pageObserver will call again.
     return;
   }
   if (player.hasClass('vt-player') && chatParent.hasClass('vt-chat')) {
@@ -275,12 +276,40 @@ function onReady() {
   var target = document.querySelector("title");
   var observer = new MutationObserver(function () {
     addButton();
-    reapplyMode();
   });
   var config = {
     childList: true,
   };
   observer.observe(target, config);
+
+  // Re-check after DOM changes, throttled since chat mutates constantly.
+  let reapplyScheduled = false;
+  const pageObserver = new MutationObserver(function () {
+    if (reapplyScheduled) {
+      return;
+    }
+    reapplyScheduled = true;
+    setTimeout(function () {
+      reapplyScheduled = false;
+      reapplyMode();
+    }, 250);
+  });
+  document.addEventListener("fullscreenchange", function () {
+    if (document.fullscreenElement) {
+      // Step aside (keeping currentMode) so Twitch's layout wins.
+      $(PLAYER_SELECTOR).removeClass('vt-player');
+      $(".vt-chat").removeClass('vt-chat');
+    } else {
+      reapplyMode();
+    }
+  });
+
+  pageObserver.observe(document.getElementById("root"), {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class"],
+  });
 
   const resizeObserver = new ResizeObserver(() => {
     // true: this is a container/window resize, not a manual chat drag,
